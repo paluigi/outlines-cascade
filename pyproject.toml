@@ -1,0 +1,84 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "outlines-cascade"
+version = "0.1.0"
+description = "Structured LLM generation with cascading failover — combines Outlines + llm-pycascade"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [
+    { name = "Luigi Palumbo" },
+]
+keywords = [
+    "llm",
+    "structured-output",
+    "cascade",
+    "failover",
+    "outlines",
+    "pydantic",
+    "json-schema",
+    "constrained-generation",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+dependencies = [
+    "outlines>=1.0,<2.0",
+    "llm-pycascade>=0.1.0",
+    "pydantic>=2.0",
+]
+
+[project.optional-dependencies]
+openai = ["openai>=1.0"]
+anthropic = ["anthropic>=0.30"]
+gemini = ["google-genai>=1.0"]
+ollama = ["ollama>=0.3"]
+transformers = ["transformers>=4.40"]
+llamacpp = ["llama-cpp-python>=0.2.80"]
+db = ["aiosqlite>=0.20"]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.5",
+]
+
+[project.urls]
+Homepage = "https://github.com/paluigi/outlines-cascade"
+Repository = "https://github.com/paluigi/outlines-cascade"
+Issues = "https://github.com/paluigi/outlines-cascade/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/outlines_cascade"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 88
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "N",   # pep8-naming
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "SIM", # flake8-simplify
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

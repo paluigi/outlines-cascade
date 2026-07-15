@@ -299,10 +299,13 @@ class StructuredCascade:
         # Build the adapter
         ptype = entry.provider if provider_cfg is None else provider_cfg.type
 
-        # Resolve API key for cloud providers
+        # Resolve API key for cloud providers that require one
         api_key = None
         if ptype in ("openai", "anthropic", "gemini"):
             api_key = self._resolve_api_key(entry.provider, provider_cfg)
+        elif ptype == "sglang":
+            # SGLang uses a dummy key unless the server has auth
+            api_key = None
 
         adapter = build_adapter(
             provider_type=ptype,

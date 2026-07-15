@@ -71,6 +71,47 @@ class TestBuildAdapter:
         )
         assert isinstance(a, LlamaCppAdapter)
 
+    def test_sglang_adapter(self):
+        from outlines_cascade.adapters import SGLangAdapter
+
+        a = build_adapter(
+            provider_type="sglang",
+            provider_name="sglang-server",
+            model="meta-llama/Llama-3.1-8B-Instruct",
+            base_url="http://localhost:30000/v1",
+        )
+        assert isinstance(a, SGLangAdapter)
+        assert a._base_url == "http://localhost:30000/v1"
+        assert a._api_key == "EMPTY"  # default
+
+    def test_sglang_requires_base_url(self):
+        with pytest.raises(ValueError, match="base_url is required"):
+            build_adapter(
+                provider_type="sglang",
+                provider_name="sglang",
+                model="test-model",
+                base_url=None,
+            )
+
+    def test_sglang_with_custom_api_key(self):
+        from outlines_cascade.adapters import SGLangAdapter
+
+        a = build_adapter(
+            provider_type="sglang",
+            provider_name="sglang",
+            model="test",
+            base_url="http://localhost:30000/v1",
+            api_key="secret-key",
+        )
+        assert isinstance(a, SGLangAdapter)
+        assert a._api_key == "secret-key"
+
+    def test_sglang_is_steerable(self):
+        """SGLang supports all output types, not just JSON."""
+        from outlines_cascade.config import ProviderKind, provider_kind
+
+        assert provider_kind("sglang") == ProviderKind.STEERABLE
+
     def test_unknown_provider_type_raises(self):
         with pytest.raises(ValueError, match="Unsupported provider type"):
             build_adapter(

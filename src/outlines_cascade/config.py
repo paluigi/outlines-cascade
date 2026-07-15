@@ -122,7 +122,6 @@ CLOUD_PROVIDERS: frozenset[str] = frozenset({
     "gemini",
     "ollama",
     "vllm",
-    "sglang",
     "tgi",
     "mistral",
     "lmstudio",
@@ -133,6 +132,7 @@ STEERABLE_PROVIDERS: frozenset[str] = frozenset({
     "transformers",
     "llamacpp",
     "mlxlm",
+    "sglang",
 })
 
 

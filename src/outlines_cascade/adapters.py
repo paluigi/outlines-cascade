@@ -247,6 +247,44 @@ class OllamaAdapter(OutlinesModelAdapter):
 # ── local (steerable) adapters ──────────────────────────────────────────
 
 
+class SGLangAdapter(OutlinesModelAdapter):
+    """Adapter for SGLang server models via Outlines.
+
+    SGLang is a server-based provider that uses the OpenAI-compatible API
+    but — unlike cloud APIs — supports **all output types** (JSON Schema,
+    regex, CFG) via Outlines' structured generation backends.
+
+    The adapter connects to a running SGLang server via an OpenAI client
+    pointed at the server's base URL.
+    """
+
+    def __init__(
+        self,
+        provider: str,
+        model: str,
+        base_url: str,
+        api_key: str = "EMPTY",
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(provider, model, **kwargs)
+        self._base_url = base_url
+        self._api_key = api_key
+
+    def _build_model(self) -> Any:
+        import outlines
+        from openai import OpenAI
+
+        client = OpenAI(api_key=self._api_key, base_url=self._base_url)
+        return outlines.from_sglang(client, self.model)
+
+    def _call_sync(self, prompt: str, output_type: Any | None) -> AdapterResult:
+        if output_type is not None:
+            text = self._model_obj(prompt, output_type)
+        else:
+            text = self._model_obj(prompt)
+        return AdapterResult(text=str(text))
+
+
 class TransformersAdapter(OutlinesModelAdapter):
     """Adapter for local HuggingFace Transformers models via Outlines.
 
@@ -332,6 +370,7 @@ _ADAPTER_MAP: dict[str, type[OutlinesModelAdapter]] = {
     "anthropic": AnthropicAdapter,
     "gemini": GeminiAdapter,
     "ollama": OllamaAdapter,
+    "sglang": SGLangAdapter,
     "transformers": TransformersAdapter,
     "llamacpp": LlamaCppAdapter,
 }
@@ -388,7 +427,7 @@ def build_adapter(
         "model": model,
     }
 
-    # Pass api_key only for cloud adapters
+    # Pass api_key only for cloud adapters that require one
     if provider_type in ("openai", "anthropic", "gemini"):
         if api_key is None:
             raise ValueError(
@@ -396,7 +435,17 @@ def build_adapter(
             )
         build_kwargs["api_key"] = api_key
 
-    if base_url:
+    # SGLang needs a base_url and has a default api_key of "EMPTY"
+    if provider_type == "sglang":
+        if base_url is None:
+            raise ValueError(
+                "base_url is required for provider type 'sglang' "
+                "(e.g. http://localhost:30000/v1)"
+            )
+        build_kwargs["base_url"] = base_url
+        build_kwargs["api_key"] = api_key or "EMPTY"
+
+    if base_url and provider_type not in ("sglang",):
         build_kwargs["base_url"] = base_url
 
     if device and provider_type in ("transformers",):

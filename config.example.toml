@@ -1,0 +1,89 @@
+# outlines-cascade configuration example
+#
+# Copy to ~/.config/outlines-cascade/config.toml and edit.
+# Override path with: OUTLINES_CASCADE_CONFIG=/path/to/config.toml
+
+# ── Providers ──────────────────────────────────────────────────────────
+# Each provider has a 'type' and optional auth/connection settings.
+# Cloud providers need an api_key_env (or api_key_service for keyring).
+# Local/stearable providers need no auth.
+
+[providers.openai]
+type = "openai"
+api_key_env = "OPENAI_API_KEY"
+
+[providers.anthropic]
+type = "anthropic"
+api_key_env = "ANTHROPIC_API_KEY"
+
+[providers.gemini]
+type = "gemini"
+api_key_env = "GEMINI_API_KEY"
+
+[providers.ollama]
+type = "ollama"
+# No API key needed for local Ollama
+
+[providers.sglang]
+type = "sglang"
+base_url = "http://localhost:30000/v1"
+# SGLang supports all output types (JSON, regex, CFG) — classified as steerable
+
+[providers.local]
+type = "transformers"
+# Local model — supports all output types via FSM-constrained decoding
+
+# ── Cascades ───────────────────────────────────────────────────────────
+# Each cascade is an ordered list of entries tried in sequence.
+# The cascade tries each entry until one succeeds.
+
+[cascades.primary]
+entries = [
+    { provider = "openai", model = "gpt-4o" },
+    { provider = "anthropic", model = "claude-sonnet-4-20250514" },
+    { provider = "gemini", model = "gemini-2.0-flash" },
+    { provider = "ollama", model = "llama3.1" },
+]
+
+# Fast cascade — cheaper/faster models first
+[cascades.fast]
+entries = [
+    { provider = "openai", model = "gpt-4o-mini" },
+    { provider = "gemini", model = "gemini-2.0-flash" },
+    { provider = "ollama", model = "mistral" },
+]
+
+# Mixed cascade — cloud for JSON, local for regex/CFG
+# The 'supported_types' field overrides auto-detection.
+[cascades.full]
+entries = [
+    # Cloud entries: auto-detected as JSON-only
+    { provider = "openai", model = "gpt-4o" },
+    { provider = "anthropic", model = "claude-sonnet-4-20250514" },
+
+    # SGLang: auto-detected as steerable (supports regex, CFG, JSON)
+    { provider = "sglang", model = "meta-llama/Llama-3.1-8B-Instruct" },
+
+    # Local fallback: supports everything via FSM
+    { provider = "local", model = "microsoft/Phi-3-mini-4k-instruct" },
+]
+
+# Regex-only cascade — only entries that support regex
+[cascades.regex_capable]
+entries = [
+    { provider = "sglang", model = "meta-llama/Llama-3.1-8B-Instruct" },
+    { provider = "local", model = "microsoft/Phi-3-mini-4k-instruct", supported_types = ["regex", "cfg", "json", "choice"] },
+]
+
+# ── Database (optional) ────────────────────────────────────────────────
+# SQLite DB for cooldown tracking with exponential backoff.
+# If omitted, no cooldowns are applied (failover still works).
+
+[database]
+path = "~/.local/share/outlines-cascade/db.sqlite"
+
+# ── Failure persistence (optional) ─────────────────────────────────────
+# Failed conversations are saved as timestamped JSON files.
+
+[failure_persistence]
+dir = "~/.local/share/outlines-cascade/failed_prompts"

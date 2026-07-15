@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 from typing import Any
 
@@ -29,7 +30,12 @@ from outlines_cascade.errors import (
     AllProvidersExhaustedError,
     TypeCompatibilityError,
 )
-from outlines_cascade.response import CascadeAttempt, StructuredResponse
+from outlines_cascade.response import (
+    BatchResult,
+    CascadeAttempt,
+    StreamChunk,
+    StructuredResponse,
+)
 from outlines_cascade.type_utils import (
     OutputTypeCategory,
     classify_output_type,
@@ -180,6 +186,227 @@ class StructuredCascade:
             attempts=attempts,
             failed_prompt_path=failed_path,
         )
+
+    # ── public API: streaming ─────────────────────────────────────────
+
+    async def stream(
+        self,
+        prompt: str,
+        output_type: Any | None = None,
+        **inference_kwargs: Any,
+    ) -> AsyncIterator[StreamChunk | StructuredResponse]:
+        """Stream a structured response via the cascade.
+
+        Yields :class:`StreamChunk` objects as text arrives.  The final
+        :class:`StructuredResponse` is yielded as the very last item.
+
+        If the first compatible entry fails, the cascade falls back to
+        the next entry (restarting the stream from the beginning).
+
+        Parameters
+        ----------
+        prompt
+            The prompt to send to the model.
+        output_type
+            The desired output type (Pydantic, JSON Schema, regex, etc.).
+        **inference_kwargs
+            Additional arguments passed to the model.
+
+        Yields
+        ------
+        StreamChunk
+            Incremental text chunks.
+        StructuredResponse
+            The final response with full metadata (always yielded last).
+        """
+        await self._init_db()
+
+        # Classify the output type
+        if output_type is not None:
+            category, term = classify_output_type(output_type)
+        else:
+            category = OutputTypeCategory.JSON
+            term = None
+
+        attempts: list[CascadeAttempt] = []
+        start = time.monotonic()
+
+        for entry in self._entries:
+            provider_cfg = self._providers.get(entry.provider)
+            entry_key = f"{entry.provider}/{entry.model}"
+            is_steerable = self._is_steerable(entry, provider_cfg)
+
+            # Check type compatibility
+            if not entry_supports_category(
+                category, entry.supported_types, is_steerable
+            ):
+                attempts.append(CascadeAttempt(
+                    provider=entry.provider,
+                    model=entry.model,
+                    status="skipped_type",
+                ))
+                continue
+
+            # Check cooldown
+            if await self._is_on_cooldown(entry_key):
+                attempts.append(CascadeAttempt(
+                    provider=entry.provider,
+                    model=entry.model,
+                    status="skipped_cooldown",
+                ))
+                continue
+
+            # Build adapter
+            try:
+                adapter = await self._get_adapter(entry, provider_cfg)
+            except Exception as exc:
+                attempts.append(CascadeAttempt(
+                    provider=entry.provider,
+                    model=entry.model,
+                    status="failed",
+                    error=f"adapter build error: {exc}",
+                ))
+                continue
+
+            # Determine effective output type
+            effective_output_type = output_type
+            needs_conversion = (
+                not is_steerable
+                and category == OutputTypeCategory.CHOICE
+                and term is not None
+            )
+            if needs_conversion:
+                converted = convert_to_json_compatible(term)
+                if converted is not None:
+                    effective_output_type = converted
+
+            # Stream from this adapter
+            full_text_parts: list[str] = []
+            entry_start = time.monotonic()
+            try:
+                async for chunk in adapter.stream(
+                    prompt, effective_output_type
+                ):
+                    full_text_parts.append(chunk)
+                    yield StreamChunk(
+                        text=chunk,
+                        provider=entry.provider,
+                        model=entry.model,
+                    )
+            except Exception as exc:
+                entry_latency = int(
+                    (time.monotonic() - entry_start) * 1000
+                )
+                logger.warning(
+                    "Stream from %s failed: %s", entry_key, exc
+                )
+                await self._set_cooldown(entry_key, exc)
+                attempts.append(CascadeAttempt(
+                    provider=entry.provider,
+                    model=entry.model,
+                    status="failed",
+                    latency_ms=entry_latency,
+                    error=str(exc),
+                ))
+                continue
+
+            # Success — build and yield the final response
+            full_text = "".join(full_text_parts)
+            adapter_result = AdapterResult(text=full_text)
+            entry_latency = int((time.monotonic() - entry_start) * 1000)
+            total_latency = int((time.monotonic() - start) * 1000)
+
+            attempt = CascadeAttempt(
+                provider=entry.provider,
+                model=entry.model,
+                status="success",
+                latency_ms=entry_latency,
+            )
+            attempts.append(attempt)
+
+            parsed = self._parse_result(
+                adapter_result, category, term, output_type
+            )
+
+            yield StreamChunk(
+                text="",
+                provider=entry.provider,
+                model=entry.model,
+                done=True,
+            )
+            yield StructuredResponse[Any](
+                value=parsed,
+                provider=entry.provider,
+                model=entry.model,
+                output_type=category.value,
+                attempts=attempts,
+                latency_ms=total_latency,
+            )
+            return
+
+        # All entries exhausted
+        type_skips = [a for a in attempts if a.status == "skipped_type"]
+        failures = [a for a in attempts if a.status == "failed"]
+
+        if type_skips and not failures:
+            available = sorted({a.entry_key for a in type_skips})
+            raise TypeCompatibilityError(category.value, available)
+
+        failed_path = None
+        if self._failure_dir:
+            failed_path = self._save_failed(prompt, output_type)
+
+        error_msgs = "; ".join(
+            f"{a.entry_key}: {a.error or a.status}" for a in attempts
+        )
+        await self._close_db()
+        raise AllProvidersExhaustedError(
+            message=error_msgs,
+            attempts=attempts,
+            failed_prompt_path=failed_path,
+        )
+
+    # ── public API: batch ─────────────────────────────────────────────
+
+    async def batch(
+        self,
+        prompts: list[str],
+        output_type: Any | None = None,
+        **inference_kwargs: Any,
+    ) -> list[BatchResult[Any]]:
+        """Generate structured responses for multiple prompts.
+
+        Each prompt is run through the full cascade independently.  All
+        prompts share the same adapter cache and cooldown state.
+
+        Parameters
+        ----------
+        prompts
+            List of prompts to process.
+        output_type
+            The desired output type for all prompts.
+        **inference_kwargs
+            Additional arguments passed to the models.
+
+        Returns
+        -------
+        list[BatchResult]
+            One result per prompt, in the same order.
+        """
+        results: list[BatchResult[Any]] = []
+        for prompt in prompts:
+            try:
+                response = await self.generate(
+                    prompt, output_type, **inference_kwargs
+                )
+                results.append(BatchResult(
+                    response=response, prompt=prompt
+                ))
+            except (AllProvidersExhaustedError, TypeCompatibilityError) as exc:
+                results.append(BatchResult(
+                    error=str(exc), prompt=prompt
+                ))
+        return results
 
     # ── internal: per-entry logic ─────────────────────────────────────
 

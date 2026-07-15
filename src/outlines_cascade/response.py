@@ -76,3 +76,37 @@ class StructuredResponse(BaseModel, Generic[T]):
             if a.status == "success":
                 return a
         return None
+
+
+class StreamChunk(BaseModel):
+    """A single chunk yielded during streaming generation.
+
+    Attributes:
+        text: The text content of this chunk.
+        provider: Provider that generated this chunk (None until a
+            provider succeeds and starts streaming).
+        model: Model that generated this chunk (None until streaming
+            starts).
+        done: True if this is the last chunk before the final
+            StructuredResponse.
+    """
+
+    text: str
+    provider: str | None = None
+    model: str | None = None
+    done: bool = False
+
+
+class BatchResult(BaseModel, Generic[T]):
+    """Result of a single prompt within a batch cascade run.
+
+    Attributes:
+        response: The StructuredResponse if successful, or None if this
+            prompt failed.
+        error: Error message if the cascade failed for this prompt.
+        prompt: The original prompt.
+    """
+
+    response: StructuredResponse[T] | None = None
+    error: str | None = None
+    prompt: str

@@ -32,13 +32,20 @@ from outlines_cascade.errors import (
     OutlinesCascadeError,
     TypeCompatibilityError,
 )
-from outlines_cascade.response import CascadeAttempt, StructuredResponse
+from outlines_cascade.response import (
+    BatchResult,
+    CascadeAttempt,
+    StreamChunk,
+    StructuredResponse,
+)
 
 __version__ = "0.1.0"
 
 __all__ = [
     # Main entry points
     "generate",
+    "stream",
+    "batch",
     "StructuredCascade",
     # Config
     "AppConfig",
@@ -53,6 +60,8 @@ __all__ = [
     # Result types
     "StructuredResponse",
     "CascadeAttempt",
+    "StreamChunk",
+    "BatchResult",
     # Adapters
     "OutlinesModelAdapter",
     "build_adapter",
@@ -189,3 +198,114 @@ async def generate(
         failure_dir=failure_dir,
     )
     return await cascade.generate(prompt, output_type, **inference_kwargs)
+
+
+async def stream(
+    prompt: str,
+    output_type: Any | None = None,
+    entries: list[CascadeEntry] | None = None,
+    providers: dict[str, ProviderConfig] | None = None,
+    db_path: str | None = None,
+    failure_dir: str | None = None,
+    config: AppConfig | None = None,
+    cascade_name: str | None = None,
+    **inference_kwargs: Any,
+):
+    """Stream a structured response via cascade failover.
+
+    Yields :class:`StreamChunk` objects as text arrives, then a final
+    :class:`StructuredResponse` as the very last item.
+
+    See :func:`generate` for parameter documentation.
+
+    Yields
+    ------
+    StreamChunk
+        Incremental text chunks with provider/model metadata.
+    StructuredResponse
+        The final response with full metadata (always last).
+    """
+    if config is not None:
+        if entries is None:
+            if cascade_name is None:
+                raise ConfigError(
+                    "Either 'entries' or 'cascade_name' must be provided "
+                    "when using 'config'."
+                )
+            if cascade_name not in config.cascades:
+                raise ConfigError(
+                    f"Cascade '{cascade_name}' not found in config."
+                )
+            entries = config.cascades[cascade_name].entries
+        if providers is None:
+            providers = config.providers
+        if db_path is None:
+            db_path = config.database.path
+        if failure_dir is None:
+            failure_dir = config.failure_persistence.dir
+
+    if entries is None:
+        raise ConfigError("No cascade entries provided.")
+
+    cascade = StructuredCascade(
+        entries=entries,
+        providers=providers or {},
+        db_path=db_path,
+        failure_dir=failure_dir,
+    )
+    async for item in cascade.stream(prompt, output_type, **inference_kwargs):
+        yield item
+
+
+async def batch(
+    prompts: list[str],
+    output_type: Any | None = None,
+    entries: list[CascadeEntry] | None = None,
+    providers: dict[str, ProviderConfig] | None = None,
+    db_path: str | None = None,
+    failure_dir: str | None = None,
+    config: AppConfig | None = None,
+    cascade_name: str | None = None,
+    **inference_kwargs: Any,
+) -> list[BatchResult]:
+    """Generate structured responses for multiple prompts.
+
+    Each prompt runs through the full cascade independently, sharing
+    adapter cache and cooldown state.
+
+    See :func:`generate` for parameter documentation.
+
+    Returns
+    -------
+    list[BatchResult]
+        One result per prompt, in the same order.
+    """
+    if config is not None:
+        if entries is None:
+            if cascade_name is None:
+                raise ConfigError(
+                    "Either 'entries' or 'cascade_name' must be provided "
+                    "when using 'config'."
+                )
+            if cascade_name not in config.cascades:
+                raise ConfigError(
+                    f"Cascade '{cascade_name}' not found in config."
+                )
+            entries = config.cascades[cascade_name].entries
+        if providers is None:
+            providers = config.providers
+        if db_path is None:
+            db_path = config.database.path
+        if failure_dir is None:
+            failure_dir = config.failure_persistence.dir
+
+    if entries is None:
+        raise ConfigError("No cascade entries provided.")
+
+    cascade = StructuredCascade(
+        entries=entries,
+        providers=providers or {},
+        db_path=db_path,
+        failure_dir=failure_dir,
+    )
+    return await cascade.batch(prompts, output_type, **inference_kwargs)

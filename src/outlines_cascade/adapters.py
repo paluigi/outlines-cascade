@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -44,6 +45,10 @@ class OutlinesModelAdapter(ABC):
     Subclasses wrap a specific Outlines model type and implement
     :meth:`_build_model` (lazy model construction) and :meth:`_call_sync`
     (the synchronous Outlines call).
+
+    Streaming and batch are supported via ``_stream_sync()`` and
+    ``_batch_sync()`` which wrap Outlines' ``model.stream()`` and
+    ``model.batch()`` respectively.
     """
 
     def __init__(
@@ -78,6 +83,64 @@ class OutlinesModelAdapter(ABC):
         )
         return result
 
+    async def stream(
+        self,
+        prompt: str,
+        output_type: Any | None,
+    ) -> AsyncIterator[str]:
+        """Stream a response, yielding text chunks.
+
+        The underlying Outlines ``model.stream()`` returns a synchronous
+        iterator.  We bridge it to async by running the sync iterator in a
+        thread and passing chunks back via an :class:`asyncio.Queue`.
+        """
+        await self._ensure_model()
+
+        queue: asyncio.Queue[str | None | Exception] = asyncio.Queue(maxsize=64)
+
+        def _producer() -> None:
+            try:
+                for chunk in self._stream_sync(prompt, output_type):
+                    asyncio.run_coroutine_threadsafe(
+                        queue.put(chunk), self._loop
+                    ).result()
+            except Exception as exc:
+                asyncio.run_coroutine_threadsafe(
+                    queue.put(exc), self._loop
+                ).result()
+            finally:
+                asyncio.run_coroutine_threadsafe(
+                    queue.put(None), self._loop
+                ).result()
+
+        self._loop = asyncio.get_running_loop()
+        task = asyncio.to_thread(_producer)
+
+        asyncio.ensure_future(task)
+
+        while True:
+            item = await queue.get()
+            if item is None:
+                break
+            if isinstance(item, Exception):
+                raise item
+            yield item
+
+    async def batch(
+        self,
+        prompts: list[str],
+        output_type: Any | None,
+    ) -> list[AdapterResult]:
+        """Generate responses for multiple prompts.
+
+        Wraps the sync ``model.batch()`` in a thread.
+        """
+        await self._ensure_model()
+        results = await asyncio.to_thread(
+            self._batch_sync, prompts, output_type
+        )
+        return results
+
     async def _ensure_model(self) -> None:
         """Build the underlying model on first use (double-checked locking)."""
         if self._model_obj is not None:
@@ -107,6 +170,43 @@ class OutlinesModelAdapter(ABC):
         Returns an :class:`AdapterResult` with the raw text and usage.
         """
         ...
+
+    def _stream_sync(
+        self,
+        prompt: str,
+        output_type: Any | None,
+    ) -> Iterator[str]:
+        """Stream the model synchronously, yielding text chunks.
+
+        Default implementation uses the Outlines model's ``stream()``
+        method.  Can be overridden by subclasses if the provider needs
+        special handling.
+        """
+        if output_type is not None:
+            stream = self._model_obj.stream(prompt, output_type)
+        else:
+            stream = self._model_obj.stream(prompt)
+
+        for chunk in stream:
+            yield str(chunk)
+
+    def _batch_sync(
+        self,
+        prompts: list[str],
+        output_type: Any | None,
+    ) -> list[AdapterResult]:
+        """Batch-call the model synchronously.
+
+        Default implementation uses the Outlines model's ``batch()``
+        method.  Can be overridden by subclasses if the provider needs
+        special handling.
+        """
+        if output_type is not None:
+            results = self._model_obj.batch(prompts, output_type)
+        else:
+            results = self._model_obj.batch(prompts)
+
+        return [AdapterResult(text=str(r)) for r in results]
 
 
 # ── cloud adapters ──────────────────────────────────────────────────────

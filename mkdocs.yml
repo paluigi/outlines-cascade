@@ -1,0 +1,48 @@
+site_name: outlines-cascade
+site_description: Structured LLM generation with cascading failover — combines Outlines + llm-pycascade
+site_url: https://outlines-cascade.readthedocs.io/
+repo_url: https://github.com/paluigi/outlines-cascade
+repo_name: paluigi/outlines-cascade
+edit_uri: edit/main/docs/
+
+docs_dir: docs
+site_dir: site
+
+theme:
+  name: material
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.indexes
+    - toc.follow
+    - content.code.copy
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+nav:
+  - Home: index.md
+  - Quick Start: quickstart.md
+  - User Guide: user_guide.md
+  - Configuration: configuration.md
+  - Provider Reference: providers.md
+  - API Reference: api_reference.md
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - toc:
+      permalink: true
